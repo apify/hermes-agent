@@ -64,6 +64,29 @@ def _reset_client_for_tests() -> None:
     _wt._apify_client_config = None
 
 
+def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str, Any]]:
+    """Normalize RAG Web Browser dataset items to the registry web search shape."""
+    results: List[Dict[str, Any]] = []
+    for i, item in enumerate(items[:limit]):
+        if not isinstance(item, dict):
+            continue
+        sr = item.get("searchResult") or {}
+        if not isinstance(sr, dict):
+            sr = {}
+        title = sr.get("title") or item.get("title", "")
+        url = sr.get("url") or item.get("url", "")
+        description = sr.get("description") or item.get("markdown", "")
+        if description and len(description) > 500:
+            description = description[:500]
+        results.append({
+            "title": title,
+            "url": url,
+            "description": description,
+            "position": i + 1,
+        })
+    return results
+
+
 class ApifyWebSearchProvider(WebSearchProvider):
     """Apify web search + extract provider.
 
@@ -93,11 +116,39 @@ class ApifyWebSearchProvider(WebSearchProvider):
         return False
 
     def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+        """Execute a web search via Apify RAG Web Browser Actor.
+
+        Sync; blocks until the Actor run completes (up to requestTimeoutSecs).
+        """
+        from tools.interrupt import is_interrupted
+
+        if is_interrupted():
+            return {"success": False, "error": "Interrupted"}
+
+        logger.info("Apify search: '%s' (limit=%d)", query, limit)
         try:
-            _get_apify_client()
-        except (ValueError, ImportError) as exc:
-            return {"success": False, "error": str(exc)}
-        raise NotImplementedError("search() implemented in Task 3")
+            client = _get_apify_client()
+            run = client.actor("apify/rag-web-browser").call(
+                run_input={
+                    "query": query,
+                    "maxResults": limit,
+                    "requestTimeoutSecs": 60,
+                }
+            )
+            if run is None:
+                return {"success": False, "error": "Apify actor run returned no result"}
+
+            dataset_id = run.get("defaultDatasetId")
+            if not dataset_id:
+                return {"success": False, "error": "Apify run missing defaultDatasetId"}
+
+            items = client.dataset(dataset_id).list_items().items
+            web_results = _normalize_rag_search_results(items, limit)
+            logger.info("Apify search: found %d results", len(web_results))
+            return {"success": True, "data": {"web": web_results}}
+        except Exception as exc:
+            logger.warning("Apify search error: %s", exc)
+            return {"success": False, "error": f"Apify search failed: {exc}"}
 
     async def extract(self, urls: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
         try:
