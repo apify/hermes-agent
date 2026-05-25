@@ -304,7 +304,7 @@ class ApifyWebSearchProvider(WebSearchProvider):
                         "metadata": metadata,
                     }
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug("Apify extract failed for %s: %s", url, exc)
                 results.append(
                     {
