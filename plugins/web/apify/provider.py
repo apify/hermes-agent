@@ -22,7 +22,7 @@ def _load_apify_client_cls() -> type:
             _lazy_ensure("search.apify", prompt=False)
         except ImportError:
             pass
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             raise ImportError(str(exc))
         from apify_client import ApifyClient
         _APIFY_CLIENT_CLS_CACHE = ApifyClient
@@ -172,7 +172,7 @@ class ApifyWebSearchProvider(WebSearchProvider):
             web_results = _normalize_rag_search_results(items, limit)
             logger.info("Apify search: found %d results", len(web_results))
             return {"success": True, "data": {"web": web_results}}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Apify search error: %s", exc)
             return {"success": False, "error": f"Apify search failed: {exc}"}
 
