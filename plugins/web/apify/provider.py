@@ -93,9 +93,17 @@ class ApifyWebSearchProvider(WebSearchProvider):
         return False
 
     def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+        try:
+            _get_apify_client()
+        except (ValueError, ImportError) as exc:
+            return {"success": False, "error": str(exc)}
         raise NotImplementedError("search() implemented in Task 3")
 
     async def extract(self, urls: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
+        try:
+            _get_apify_client()
+        except (ValueError, ImportError) as exc:
+            return [{"url": u, "title": "", "content": "", "raw_content": "", "error": str(exc)} for u in urls]
         raise NotImplementedError("extract() implemented in Task 4")
 
     def get_setup_schema(self) -> Dict[str, Any]:
