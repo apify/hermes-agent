@@ -67,7 +67,7 @@ def _reset_client_for_tests() -> None:
 def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str, Any]]:
     """Normalize RAG Web Browser dataset items to the registry web search shape."""
     results: List[Dict[str, Any]] = []
-    for i, item in enumerate(items[:limit]):
+    for item in items[:limit]:
         if not isinstance(item, dict):
             continue
         sr = item.get("searchResult") or {}
