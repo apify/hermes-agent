@@ -87,6 +87,32 @@ def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str
     return results
 
 
+def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optional[Dict[str, Any]]:
+    """Blocking call to apify/website-content-crawler for a single URL.
+
+    Returns the first dataset item (single-page crawl), or None if no items.
+    Intended to be called via asyncio.to_thread from extract().
+    """
+    client = _get_apify_client()
+    run = client.actor("apify/website-content-crawler").call(
+        run_input={
+            "startUrls": [{"url": url}],
+            "maxCrawlPages": 1,
+            "outputFormats": output_formats,
+        }
+    )
+    if run is None:
+        return None
+    dataset_id = run.get("defaultDatasetId")
+    if not dataset_id:
+        return None
+    items = client.dataset(dataset_id).list_items().items
+    if not items:
+        return None
+    item = items[0]
+    return item if isinstance(item, dict) else None
+
+
 class ApifyWebSearchProvider(WebSearchProvider):
     """Apify web search + extract provider.
 
@@ -151,11 +177,146 @@ class ApifyWebSearchProvider(WebSearchProvider):
             return {"success": False, "error": f"Apify search failed: {exc}"}
 
     async def extract(self, urls: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
-        try:
-            _get_apify_client()
-        except (ValueError, ImportError) as exc:
-            return [{"url": u, "title": "", "content": "", "raw_content": "", "error": str(exc)} for u in urls]
-        raise NotImplementedError("extract() implemented in Task 4")
+        """Extract content from URLs via Apify Website Content Crawler.
+
+        Each URL is crawled in a background thread (asyncio.to_thread) with a
+        60s asyncio.wait_for guard. Website-access policy is checked before
+        each Actor call. Per-URL failures are returned as error items, not raised.
+
+        kwargs:
+          format: "markdown" | "html" | None (default: both)
+        """
+        from tools.interrupt import is_interrupted as _is_interrupted
+
+        if _is_interrupted():
+            return [{"url": u, "error": "Interrupted", "title": ""} for u in urls]
+
+        fmt = kwargs.get("format")
+        if fmt == "markdown":
+            output_formats = ["markdown"]
+        elif fmt == "html":
+            output_formats = ["html"]
+        else:
+            output_formats = ["markdown", "html"]
+
+        results: List[Dict[str, Any]] = []
+
+        for url in urls:
+            if _is_interrupted():
+                results.append({"url": url, "error": "Interrupted", "title": ""})
+                continue
+
+            blocked = check_website_access(url)
+            if blocked:
+                logger.info(
+                    "Blocked web_extract for %s by rule %s",
+                    blocked["host"],
+                    blocked["rule"],
+                )
+                results.append(
+                    {
+                        "url": url,
+                        "title": "",
+                        "content": "",
+                        "error": blocked["message"],
+                        "blocked_by_policy": {
+                            "host": blocked["host"],
+                            "rule": blocked["rule"],
+                            "source": blocked["source"],
+                        },
+                    }
+                )
+                continue
+
+            try:
+                logger.info("Apify extracting: %s", url)
+                try:
+                    item = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            _run_website_content_crawler,
+                            url,
+                            output_formats,
+                        ),
+                        timeout=60,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Apify WCC timed out for %s", url)
+                    results.append(
+                        {
+                            "url": url,
+                            "title": "",
+                            "content": "",
+                            "error": (
+                                "Extract timed out after 60s — page may be too large "
+                                "or unresponsive. Try browser_navigate instead."
+                            ),
+                        }
+                    )
+                    continue
+
+                if item is None:
+                    results.append(
+                        {"url": url, "title": "", "content": "", "error": "Actor returned no content"}
+                    )
+                    continue
+
+                final_url = item.get("url", url)
+
+                final_blocked = check_website_access(final_url)
+                if final_blocked:
+                    logger.info(
+                        "Blocked redirected web_extract for %s by rule %s",
+                        final_blocked["host"],
+                        final_blocked["rule"],
+                    )
+                    results.append(
+                        {
+                            "url": final_url,
+                            "title": item.get("title", ""),
+                            "content": "",
+                            "raw_content": "",
+                            "error": final_blocked["message"],
+                            "blocked_by_policy": {
+                                "host": final_blocked["host"],
+                                "rule": final_blocked["rule"],
+                                "source": final_blocked["source"],
+                            },
+                        }
+                    )
+                    continue
+
+                content_markdown = item.get("markdown")
+                content_html = item.get("html")
+                title = item.get("title", "")
+                metadata = item.get("metadata") or {}
+
+                if fmt == "markdown" or (fmt is None and content_markdown):
+                    chosen_content = content_markdown or ""
+                else:
+                    chosen_content = content_html or content_markdown or ""
+
+                results.append(
+                    {
+                        "url": final_url,
+                        "title": title,
+                        "content": chosen_content,
+                        "raw_content": chosen_content,
+                        "metadata": metadata,
+                    }
+                )
+            except Exception as exc:
+                logger.debug("Apify extract failed for %s: %s", url, exc)
+                results.append(
+                    {
+                        "url": url,
+                        "title": "",
+                        "content": "",
+                        "raw_content": "",
+                        "error": str(exc),
+                    }
+                )
+
+        return results
 
     def get_setup_schema(self) -> Dict[str, Any]:
         return {
