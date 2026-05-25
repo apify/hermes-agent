@@ -82,7 +82,7 @@ def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str
             "title": title,
             "url": url,
             "description": description,
-            "position": i + 1,
+            "position": len(results) + 1,
         })
     return results
 
