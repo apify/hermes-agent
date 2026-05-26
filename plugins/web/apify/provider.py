@@ -10,7 +10,11 @@ from tools.website_policy import check_website_access
 
 logger = logging.getLogger(__name__)
 
+
+
 _APIFY_CLIENT_CLS_CACHE: Optional[type] = None
+
+
 
 
 def _load_apify_client_cls() -> type:
@@ -94,15 +98,18 @@ def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optiona
     Intended to be called via asyncio.to_thread from extract().
     """
     client = _get_apify_client()
-    run = client.actor("apify/website-content-crawler").call(
+    run = client.actor("apify/website-content-crawler").start(
         run_input={
             "startUrls": [{"url": url}],
             "maxCrawlPages": 1,
             "outputFormats": output_formats,
         }
     )
+    logger.info("Apify website-content-crawler started — https://console.apify.com/actors/runs/%s", run.id)
+    run = client.run(run.id).wait_for_finish()
     if run is None:
         return None
+    logger.info("Apify website-content-crawler: %s", run.status)
     dataset_id = run.default_dataset_id
     if not dataset_id:
         return None
@@ -154,15 +161,18 @@ class ApifyWebSearchProvider(WebSearchProvider):
         logger.info("Apify search: '%s' (limit=%d)", query, limit)
         try:
             client = _get_apify_client()
-            run = client.actor("apify/rag-web-browser").call(
+            run = client.actor("apify/rag-web-browser").start(
                 run_input={
                     "query": query,
                     "maxResults": limit,
                     "requestTimeoutSecs": 60,
                 }
             )
+            logger.info("Apify rag-web-browser started — https://console.apify.com/actors/runs/%s", run.id)
+            run = client.run(run.id).wait_for_finish()
             if run is None:
                 return {"success": False, "error": "Apify actor run returned no result"}
+            logger.info("Apify rag-web-browser: %s", run.status)
 
             dataset_id = run.default_dataset_id
             if not dataset_id:
