@@ -103,7 +103,7 @@ def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optiona
     )
     if run is None:
         return None
-    dataset_id = run.get("defaultDatasetId")
+    dataset_id = run.default_dataset_id
     if not dataset_id:
         return None
     items = client.dataset(dataset_id).list_items().items
@@ -164,7 +164,7 @@ class ApifyWebSearchProvider(WebSearchProvider):
             if run is None:
                 return {"success": False, "error": "Apify actor run returned no result"}
 
-            dataset_id = run.get("defaultDatasetId")
+            dataset_id = run.default_dataset_id
             if not dataset_id:
                 return {"success": False, "error": "Apify run missing defaultDatasetId"}
 
@@ -321,7 +321,7 @@ class ApifyWebSearchProvider(WebSearchProvider):
     def get_setup_schema(self) -> Dict[str, Any]:
         return {
             "name": "Apify",
-            "badge": "paid · free tier",
+            "badge": "paid",
             "tag": (
                 "JS-rendered, bot-protected, and geo-gated pages via Apify's "
                 "residential proxy infrastructure. Uses RAG Web Browser for search "

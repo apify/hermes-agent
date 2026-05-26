@@ -2299,6 +2299,14 @@ OPTIONAL_ENV_VARS = {
         "password": True,
         "category": "tool",
     },
+    "APIFY_API_TOKEN": {
+        "description": "Apify API token for web search (RAG Web Browser) and page extract (Website Content Crawler)",
+        "prompt": "Apify API token",
+        "url": "https://apify.com/account/integrations",
+        "tools": ["web_search", "web_extract"],
+        "password": True,
+        "category": "tool",
+    },
     "SEARXNG_URL": {
         "description": "URL of your SearXNG instance for free self-hosted web search",
         "prompt": "SearXNG URL (e.g. http://localhost:8080)",
@@ -5257,7 +5265,7 @@ def set_config_value(key: str, value: str):
         'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'VOICE_TOOLS_OPENAI_KEY',
         'EXA_API_KEY', 'PARALLEL_API_KEY', 'FIRECRAWL_API_KEY', 'FIRECRAWL_API_URL',
         'FIRECRAWL_GATEWAY_URL', 'TOOL_GATEWAY_DOMAIN', 'TOOL_GATEWAY_SCHEME',
-        'TOOL_GATEWAY_USER_TOKEN', 'TAVILY_API_KEY',
+        'TOOL_GATEWAY_USER_TOKEN', 'TAVILY_API_KEY', 'APIFY_API_TOKEN',
         'BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'BROWSER_USE_API_KEY',
         'FAL_KEY', 'TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN',
         'TERMINAL_SSH_HOST', 'TERMINAL_SSH_USER', 'TERMINAL_SSH_KEY',
