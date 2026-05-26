@@ -1,3 +1,27 @@
+"""Apify web search + extract + crawl — plugin form.
+
+Subclasses :class:`agent.web_search_provider.WebSearchProvider`. Three
+capabilities advertised:
+
+- ``supports_search()``  -> True  (apify/rag-web-browser Actor)
+- ``supports_extract()`` -> True  (apify/website-content-crawler, single-page)
+- ``supports_crawl()``   -> True  (apify/website-content-crawler, multi-page)
+
+search() is sync; extract() and crawl() are async (each Actor call runs in
+``asyncio.to_thread`` with an ``asyncio.wait_for`` guard).
+
+Config keys this provider responds to::
+
+    web:
+      search_backend: "apify"     # explicit per-capability
+      extract_backend: "apify"    # explicit per-capability
+      backend: "apify"            # shared fallback
+
+Env vars::
+
+    APIFY_API_TOKEN=...          # https://apify.com/account/integrations
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,15 +34,19 @@ from tools.website_policy import check_website_access
 
 logger = logging.getLogger(__name__)
 
+_RAG_ACTOR = "apify/rag-web-browser"
+_WCC_ACTOR = "apify/website-content-crawler"
 
+
+# ---------------------------------------------------------------------------
+# SDK lazy import + client cache
+# ---------------------------------------------------------------------------
 
 _APIFY_CLIENT_CLS_CACHE: Optional[type] = None
 
 
-
-
 def _load_apify_client_cls() -> type:
-    """Import and cache apify_client.ApifyClient (lazy, deferred on first use)."""
+    """Import and cache apify_client.ApifyClient (deferred to first use)."""
     global _APIFY_CLIENT_CLS_CACHE
     if _APIFY_CLIENT_CLS_CACHE is None:
         try:
@@ -31,6 +59,11 @@ def _load_apify_client_cls() -> type:
         from apify_client import ApifyClient
         _APIFY_CLIENT_CLS_CACHE = ApifyClient
     return _APIFY_CLIENT_CLS_CACHE
+
+
+def check_apify_api_key() -> bool:
+    """Return True when APIFY_API_TOKEN is configured."""
+    return bool(os.getenv("APIFY_API_TOKEN", "").strip())
 
 
 def _get_apify_client() -> Any:
@@ -68,6 +101,79 @@ def _reset_client_for_tests() -> None:
     _wt._apify_client_config = None
 
 
+# ---------------------------------------------------------------------------
+# Actor execution
+# ---------------------------------------------------------------------------
+
+
+def _run_actor_blocking(actor_id: str, run_input: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Start an Apify Actor, wait for completion, return dataset items.
+
+    Blocking — intended to be called via asyncio.to_thread from async methods.
+    Returns [] when the Actor fails, is aborted, or produces no dataset.
+    Raises ValueError if the client is unconfigured.
+    """
+    client = _get_apify_client()
+    started = client.actor(actor_id).start(run_input=run_input)
+    run_id = started.id
+    logger.info("Apify %s started — https://console.apify.com/actors/runs/%s", actor_id, run_id)
+    run = client.run(run_id).wait_for_finish()
+    if run is None:
+        logger.warning("Apify %s run %s: wait_for_finish returned None", actor_id, run_id)
+        return []
+    if run.status != "SUCCEEDED":
+        logger.warning("Apify %s run %s finished with status %s", actor_id, run_id, run.status)
+        return []
+    dataset_id = run.default_dataset_id
+    if not dataset_id:
+        return []
+    return list(client.dataset(dataset_id).list_items().items)
+
+
+def _run_wcc_crawl(url: str, max_pages: int, max_depth: int) -> List[Dict[str, Any]]:
+    """Multi-page crawl via apify/website-content-crawler.
+
+    Intended to be called via asyncio.to_thread from crawl().
+    Returns raw dataset items (plain dicts).
+    """
+    return _run_actor_blocking(
+        _WCC_ACTOR,
+        {
+            "startUrls": [{"url": url}],
+            "maxCrawlPages": max_pages,
+            "maxCrawlDepth": max_depth,
+            "outputFormats": ["markdown"],
+            "saveMarkdown": True,
+            "saveHtml": False,
+        },
+    )
+
+
+def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optional[Dict[str, Any]]:
+    """Single-page extract via apify/website-content-crawler.
+
+    Intended to be called via asyncio.to_thread from extract().
+    Returns the first dataset item, or None if the Actor returned no items.
+    """
+    items = _run_actor_blocking(
+        _WCC_ACTOR,
+        {
+            "startUrls": [{"url": url}],
+            "maxCrawlPages": 1,
+            "outputFormats": output_formats,
+        },
+    )
+    if not items:
+        return None
+    item = items[0]
+    return item if isinstance(item, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# Response normalization
+# ---------------------------------------------------------------------------
+
+
 def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str, Any]]:
     """Normalize RAG Web Browser dataset items to the registry web search shape."""
     results: List[Dict[str, Any]] = []
@@ -91,61 +197,9 @@ def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str
     return results
 
 
-def _run_wcc_crawl(url: str, max_pages: int, max_depth: int) -> List[Dict[str, Any]]:
-    """Blocking multi-page crawl via apify/website-content-crawler.
-
-    Intended to be called via asyncio.to_thread from crawl().
-    Returns raw dataset items (plain dicts).
-    """
-    client = _get_apify_client()
-    run = client.actor("apify/website-content-crawler").start(
-        run_input={
-            "startUrls": [{"url": url}],
-            "maxCrawlPages": max_pages,
-            "maxCrawlDepth": max_depth,
-            "outputFormats": ["markdown"],
-            "saveMarkdown": True,
-            "saveHtml": False,
-        }
-    )
-    logger.info("Apify WCC crawl started — https://console.apify.com/actors/runs/%s", run.id)
-    run = client.run(run.id).wait_for_finish()
-    if run is None:
-        return []
-    logger.info("Apify WCC crawl: %s", run.status)
-    dataset_id = run.default_dataset_id
-    if not dataset_id:
-        return []
-    return client.dataset(dataset_id).list_items().items
-
-
-def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optional[Dict[str, Any]]:
-    """Blocking call to apify/website-content-crawler for a single URL.
-
-    Returns the first dataset item (single-page crawl), or None if no items.
-    Intended to be called via asyncio.to_thread from extract().
-    """
-    client = _get_apify_client()
-    run = client.actor("apify/website-content-crawler").start(
-        run_input={
-            "startUrls": [{"url": url}],
-            "maxCrawlPages": 1,
-            "outputFormats": output_formats,
-        }
-    )
-    logger.info("Apify website-content-crawler started — https://console.apify.com/actors/runs/%s", run.id)
-    run = client.run(run.id).wait_for_finish()
-    if run is None:
-        return None
-    logger.info("Apify website-content-crawler: %s", run.status)
-    dataset_id = run.default_dataset_id
-    if not dataset_id:
-        return None
-    items = client.dataset(dataset_id).list_items().items
-    if not items:
-        return None
-    item = items[0]
-    return item if isinstance(item, dict) else None
+# ---------------------------------------------------------------------------
+# Provider class
+# ---------------------------------------------------------------------------
 
 
 class ApifyWebSearchProvider(WebSearchProvider):
@@ -165,7 +219,7 @@ class ApifyWebSearchProvider(WebSearchProvider):
         return "Apify"
 
     def is_available(self) -> bool:
-        return bool(os.getenv("APIFY_API_TOKEN", "").strip())
+        return check_apify_api_key()
 
     def supports_search(self) -> bool:
         return True
@@ -188,25 +242,14 @@ class ApifyWebSearchProvider(WebSearchProvider):
 
         logger.info("Apify search: '%s' (limit=%d)", query, limit)
         try:
-            client = _get_apify_client()
-            run = client.actor("apify/rag-web-browser").start(
-                run_input={
+            items = _run_actor_blocking(
+                _RAG_ACTOR,
+                {
                     "query": query,
                     "maxResults": limit,
                     "requestTimeoutSecs": 60,
-                }
+                },
             )
-            logger.info("Apify rag-web-browser started — https://console.apify.com/actors/runs/%s", run.id)
-            run = client.run(run.id).wait_for_finish()
-            if run is None:
-                return {"success": False, "error": "Apify actor run returned no result"}
-            logger.info("Apify rag-web-browser: %s", run.status)
-
-            dataset_id = run.default_dataset_id
-            if not dataset_id:
-                return {"success": False, "error": "Apify run missing defaultDatasetId"}
-
-            items = client.dataset(dataset_id).list_items().items
             web_results = _normalize_rag_search_results(items, limit)
             logger.info("Apify search: found %d results", len(web_results))
             return {"success": True, "data": {"web": web_results}}
