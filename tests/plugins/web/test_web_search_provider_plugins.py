@@ -106,7 +106,7 @@ class TestBundledPluginsRegister:
             ("firecrawl", True, True, True),
             # xai: search-only via Grok's agentic web_search tool.
             ("xai", True, False, False),
-            ("apify", True, True, False),
+            ("apify", True, True, True),
         ],
     )
     def test_capability_flags_match_spec(
@@ -544,3 +544,16 @@ class TestErrorResponseShapes:
         assert len(result) == 1
         assert "error" in result[0]
         assert result[0]["url"] == "https://example.com"
+
+    def test_apify_crawl_returns_error_dict_when_unconfigured(self) -> None:
+        _ensure_plugins_loaded()
+        from agent.web_search_registry import get_provider
+
+        p = get_provider("apify")
+        assert p is not None
+        result = asyncio.run(p.crawl("https://example.com"))
+        assert isinstance(result, dict)
+        assert "results" in result
+        assert len(result["results"]) >= 1
+        assert "error" in result["results"][0]
+        assert result["results"][0]["url"] == "https://example.com"

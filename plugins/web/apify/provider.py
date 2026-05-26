@@ -91,6 +91,34 @@ def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str
     return results
 
 
+def _run_wcc_crawl(url: str, max_pages: int, max_depth: int) -> List[Dict[str, Any]]:
+    """Blocking multi-page crawl via apify/website-content-crawler.
+
+    Intended to be called via asyncio.to_thread from crawl().
+    Returns raw dataset items (plain dicts).
+    """
+    client = _get_apify_client()
+    run = client.actor("apify/website-content-crawler").start(
+        run_input={
+            "startUrls": [{"url": url}],
+            "maxCrawlPages": max_pages,
+            "maxCrawlDepth": max_depth,
+            "outputFormats": ["markdown"],
+            "saveMarkdown": True,
+            "saveHtml": False,
+        }
+    )
+    logger.info("Apify WCC crawl started — https://console.apify.com/actors/runs/%s", run.id)
+    run = client.run(run.id).wait_for_finish()
+    if run is None:
+        return []
+    logger.info("Apify WCC crawl: %s", run.status)
+    dataset_id = run.default_dataset_id
+    if not dataset_id:
+        return []
+    return client.dataset(dataset_id).list_items().items
+
+
 def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optional[Dict[str, Any]]:
     """Blocking call to apify/website-content-crawler for a single URL.
 
@@ -121,11 +149,11 @@ def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optiona
 
 
 class ApifyWebSearchProvider(WebSearchProvider):
-    """Apify web search + extract provider.
+    """Apify web search + extract + crawl provider.
 
     search()   — apify/rag-web-browser Actor (sync, 60s timeout in run input)
     extract()  — apify/website-content-crawler Actor (async, per-URL, 60s asyncio guard)
-    crawl()    — not supported in v1 (supports_crawl returns False)
+    crawl()    — apify/website-content-crawler Actor (async, multi-page, 300s ceiling)
     """
 
     @property
@@ -146,7 +174,7 @@ class ApifyWebSearchProvider(WebSearchProvider):
         return True
 
     def supports_crawl(self) -> bool:
-        return False
+        return True
 
     def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
         """Execute a web search via Apify RAG Web Browser Actor.
@@ -327,6 +355,95 @@ class ApifyWebSearchProvider(WebSearchProvider):
                 )
 
         return results
+
+    async def crawl(self, url: str, **kwargs: Any) -> Dict[str, Any]:
+        """Crawl a seed URL via Apify Website Content Crawler.
+
+        Multi-page crawl wrapped in asyncio.to_thread with a 300s ceiling.
+        Per-page URLs are re-checked against website-access policy. Per-page
+        failures are returned as error items, not raised.
+
+        kwargs:
+          instructions: str — logged and dropped (WCC has no NL instructions param)
+          limit: int — max pages to crawl (default 20)
+          depth: "basic" → maxCrawlDepth=2, "advanced" → maxCrawlDepth=5,
+                 int → direct, None → 0 (unlimited, capped by limit)
+        """
+        from tools.interrupt import is_interrupted as _is_interrupted
+
+        if _is_interrupted():
+            return {"results": [{"url": url, "title": "", "content": "", "error": "Interrupted"}]}
+
+        instructions = kwargs.get("instructions")
+        limit = int(kwargs.get("limit", 20))
+        depth_raw = kwargs.get("depth")
+
+        if depth_raw == "basic":
+            max_depth = 2
+        elif depth_raw == "advanced":
+            max_depth = 5
+        elif isinstance(depth_raw, int):
+            max_depth = depth_raw
+        else:
+            max_depth = 0
+
+        if instructions:
+            logger.info("Apify crawl: 'instructions' ignored (not supported by WCC)")
+
+        logger.info("Apify crawl: %s (limit=%d, depth=%s)", url, limit, depth_raw or "unlimited")
+
+        try:
+            items = await asyncio.wait_for(
+                asyncio.to_thread(_run_wcc_crawl, url, limit, max_depth),
+                timeout=300,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Apify crawl timed out for %s", url)
+            return {"results": [{"url": url, "title": "", "content": "",
+                                 "error": "Crawl timed out after 300s"}]}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Apify crawl error: %s", exc)
+            return {"results": [{"url": url, "title": "", "content": "", "error": str(exc)}]}
+
+        pages: List[Dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            page_url = item.get("url", url)
+            title = item.get("title", "")
+
+            blocked = check_website_access(page_url)
+            if blocked:
+                logger.info(
+                    "Blocked crawled page %s by rule %s",
+                    blocked["host"],
+                    blocked["rule"],
+                )
+                pages.append({
+                    "url": page_url,
+                    "title": title,
+                    "content": "",
+                    "raw_content": "",
+                    "error": blocked["message"],
+                    "blocked_by_policy": {
+                        "host": blocked["host"],
+                        "rule": blocked["rule"],
+                        "source": blocked["source"],
+                    },
+                })
+                continue
+
+            content = item.get("markdown") or item.get("text") or ""
+            pages.append({
+                "url": page_url,
+                "title": title,
+                "content": content,
+                "raw_content": content,
+                "metadata": item.get("metadata") or {},
+            })
+
+        logger.info("Apify crawl: %d pages collected", len(pages))
+        return {"results": pages}
 
     def get_setup_schema(self) -> Dict[str, Any]:
         return {
