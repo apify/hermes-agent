@@ -1,8 +1,8 @@
 """Apify Actor execution tools — discover, start, collect."""
 from __future__ import annotations
 
-import asyncio
-import json
+import asyncio  # noqa: F401 — used by _collect_handler
+import json     # noqa: F401 — used by handlers
 import logging
 from typing import Any, Dict, List
 
@@ -15,10 +15,10 @@ _TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
 
 def _attr(obj: Any, key: str, default: Any = None) -> Any:
     """Get attribute or dict key from SDK response objects (apify_client returns either)."""
-    if hasattr(obj, key):
-        return getattr(obj, key)
     if isinstance(obj, dict):
         return obj.get(key, default)
+    if obj is not None and hasattr(obj, key):
+        return getattr(obj, key)
     return default
 
 
