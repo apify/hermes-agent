@@ -175,7 +175,75 @@ def _start_handler(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _collect_handler(args: Dict[str, Any]) -> Dict[str, Any]:
-    return {}
+    from tools.interrupt import is_interrupted
+    if is_interrupted():
+        return {"error": "Interrupted"}
+
+    run_refs = args.get("runs") or []
+    if not run_refs:
+        return {"error": "Provide 'runs' array (from apify_start)."}
+
+    client = _get_client()
+
+    async def _check_run(ref: Dict[str, Any]) -> Dict[str, Any]:
+        run_id = ref.get("run_id", "")
+        actor_id = ref.get("actor_id", "")
+        dataset_id = ref.get("dataset_id", "")
+        label = ref.get("label")
+
+        run_info = await asyncio.to_thread(client.run(run_id).get)
+
+        base: Dict[str, Any] = {
+            "run_id": run_id,
+            "actor_id": actor_id,
+            "dataset_id": dataset_id,
+        }
+        if label:
+            base["label"] = label
+
+        if run_info is None:
+            return {**base, "_type": "error", "error": "Run not found."}
+
+        status = _attr(run_info, "status", "UNKNOWN")
+        base["status"] = status
+
+        if status not in _TERMINAL_STATUSES:
+            return {**base, "_type": "pending"}
+
+        if status != "SUCCEEDED":
+            return {**base, "_type": "error", "error": f"Run ended with status: {status}"}
+
+        # SUCCEEDED — fetch dataset (implemented in Task 8)
+        return {**base, "_type": "succeeded_placeholder"}
+
+    raw_results = await asyncio.gather(
+        *[_check_run(ref) for ref in run_refs],
+        return_exceptions=True,
+    )
+
+    completed: List[Dict[str, Any]] = []
+    pending: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for r in raw_results:
+        if isinstance(r, Exception):
+            errors.append({"error": str(r)})
+            continue
+        t = r.pop("_type", "error")
+        if t == "pending":
+            pending.append(r)
+        elif t == "error":
+            errors.append(r)
+        else:
+            # placeholder for Task 8 — completed items from succeeded runs
+            completed.append(r)
+
+    return {
+        "all_done": len(pending) == 0,
+        "completed": completed,
+        "pending": pending,
+        "errors": errors,
+    }
 
 
 # ---------------------------------------------------------------------------

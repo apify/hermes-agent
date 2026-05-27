@@ -280,3 +280,93 @@ class TestStart:
 
         assert result == {"error": "Interrupted"}
         mock_client.actor.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# apify_collect — non-terminal states and errors
+# ---------------------------------------------------------------------------
+
+class TestCollectNonTerminal:
+    @pytest.mark.asyncio
+    async def test_running_run_goes_to_pending(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "RUNNING"
+        mock_client.run.return_value.get.return_value = run_info
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result["all_done"] is False
+        assert len(result["pending"]) == 1
+        assert result["pending"][0]["run_id"] == "r1"
+        assert result["pending"][0]["status"] == "RUNNING"
+        assert result["completed"] == []
+        assert result["errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_queued_run_goes_to_pending(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "QUEUED"
+        mock_client.run.return_value.get.return_value = run_info
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result["all_done"] is False
+        assert result["pending"][0]["status"] == "QUEUED"
+
+    @pytest.mark.asyncio
+    async def test_failed_run_goes_to_errors(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "FAILED"
+        mock_client.run.return_value.get.return_value = run_info
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result["all_done"] is True  # no pending
+        assert result["errors"][0]["status"] == "FAILED"
+        assert "FAILED" in result["errors"][0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_aborted_run_goes_to_errors(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "ABORTED"
+        mock_client.run.return_value.get.return_value = run_info
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result["errors"][0]["status"] == "ABORTED"
+
+    @pytest.mark.asyncio
+    async def test_run_not_found_goes_to_errors(self, mock_client):
+        mock_client.run.return_value.get.return_value = None
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert "not found" in result["errors"][0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_label_preserved_in_pending(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "RUNNING"
+        mock_client.run.return_value.get.return_value = run_info
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1", "label": "instagram"}]
+        })
+
+        assert result["pending"][0]["label"] == "instagram"
