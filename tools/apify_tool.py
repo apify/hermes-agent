@@ -37,7 +37,51 @@ def _check_token() -> bool:
 # ---------------------------------------------------------------------------
 
 def _discover_handler(args: Dict[str, Any]) -> Dict[str, Any]:
-    return {}
+    from tools.interrupt import is_interrupted
+    if is_interrupted():
+        return {"error": "Interrupted"}
+
+    query = (_attr(args, "query") or "").strip() or None
+    actor_id = (_attr(args, "actor_id") or "").strip() or None
+
+    if not query and not actor_id:
+        return {
+            "error": (
+                "Provide exactly one of 'query' (to search the Apify Store) "
+                "or 'actor_id' (to fetch an Actor's input schema)."
+            )
+        }
+
+    client = _get_client()
+
+    if actor_id:
+        # Implemented in Task 4
+        return {"error": "actor_id lookup not yet implemented"}
+
+    # Store search
+    try:
+        result = client.store().list(search=query, limit=10)
+        items = _attr(result, "items") or []
+        actors: List[Dict[str, Any]] = []
+        for item in items:
+            stats = _attr(item, "stats") or {}
+            name = _attr(item, "name", "")
+            username = _attr(item, "username", "")
+            title = _attr(item, "title") or name
+            desc = (_attr(item, "description") or "")[:200]
+            run_count = _attr(stats, "totalRuns", 0) or 0
+            rating = _attr(stats, "averageRating")
+            actors.append({
+                "actor_id": f"{username}~{name}",
+                "name": title,
+                "description": desc,
+                "run_count": run_count,
+                "rating": rating,
+            })
+        return {"actors": actors}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("apify_discover store search error for '%s': %s", query, exc)
+        return {"error": str(exc)}
 
 
 def _start_handler(args: Dict[str, Any]) -> Dict[str, Any]:
