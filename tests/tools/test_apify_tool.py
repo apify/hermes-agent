@@ -93,3 +93,75 @@ class TestDiscoverStoreSearch:
 
         assert "error" in result
         assert "API error" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# apify_discover — actor schema fetch
+# ---------------------------------------------------------------------------
+
+class TestDiscoverActorSchema:
+    def _setup_build_mock(self, mock_client, *, input_schema=None, readme=None):
+        """Helper: wire up actor + build mock chain."""
+        actor_info = MagicMock()
+        actor_info.username = "apify"
+        actor_info.name = "google-search-scraper"
+        actor_info.description = "Scrapes Google Search."
+        mock_client.actor.return_value.get.return_value = actor_info
+
+        build_item = MagicMock()
+        build_item.id = "build-abc"
+        builds_list = MagicMock()
+        builds_list.items = [build_item]
+        mock_client.actor.return_value.builds.return_value.list.return_value = builds_list
+
+        build_detail = MagicMock()
+        actor_def = MagicMock()
+        actor_def.input = input_schema  # dict or None
+        actor_def.readme = readme
+        build_detail.actorDefinition = actor_def
+        build_detail.inputSchema = None
+        build_detail.readme = None
+        mock_client.build.return_value.get.return_value = build_detail
+
+        return actor_info, build_detail
+
+    def test_returns_actor_schema(self, mock_client):
+        schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+        self._setup_build_mock(mock_client, input_schema=schema, readme="# README content")
+
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({"actor_id": "apify~google-search-scraper"})
+
+        assert result["actor_id"] == "apify~google-search-scraper"
+        assert result["name"] == "google-search-scraper"
+        assert result["description"] == "Scrapes Google Search."
+        assert json.loads(result["input_schema"]) == schema
+        assert result["readme"] == "# README content"
+
+    def test_readme_truncated_to_3000_chars(self, mock_client):
+        self._setup_build_mock(mock_client, readme="R" * 4000)
+
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({"actor_id": "apify~google-search-scraper"})
+
+        assert len(result["readme"]) == 3000
+
+    def test_falls_back_to_build_input_schema_string(self, mock_client):
+        """When actorDefinition.input is None, fall back to build.inputSchema string."""
+        _, build_detail = self._setup_build_mock(mock_client, input_schema=None)
+        build_detail.inputSchema = '{"type":"object"}'
+        build_detail.actorDefinition.input = None
+
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({"actor_id": "apify~google-search-scraper"})
+
+        assert result["input_schema"] == '{"type":"object"}'
+
+    def test_actor_not_found_returns_error(self, mock_client):
+        mock_client.actor.return_value.get.return_value = None
+
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({"actor_id": "apify~nonexistent"})
+
+        assert "error" in result
+        assert "not found" in result["error"]

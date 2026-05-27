@@ -55,8 +55,52 @@ def _discover_handler(args: Dict[str, Any]) -> Dict[str, Any]:
     client = _get_client()
 
     if actor_id:
-        # Implemented in Task 4
-        return {"error": "actor_id lookup not yet implemented"}
+        try:
+            actor_info = client.actor(actor_id).get()
+            if actor_info is None:
+                return {
+                    "error": (
+                        f"Actor '{actor_id}' not found. "
+                        "Check the ID format: username~actor-name."
+                    )
+                }
+
+            builds_result = client.actor(actor_id).builds().list(limit=1, desc=True)
+            build_items = _attr(builds_result, "items") or []
+
+            input_schema: Any = None
+            readme: Any = None
+
+            if build_items:
+                build_item = build_items[0]
+                build_id = _attr(build_item, "id")
+                build_detail = client.build(build_id).get()
+                if build_detail is not None:
+                    actor_def = _attr(build_detail, "actorDefinition") or {}
+                    raw_schema = _attr(actor_def, "input")
+                    if raw_schema:
+                        input_schema = json.dumps(raw_schema)
+                    else:
+                        fallback = _attr(build_detail, "inputSchema")
+                        if fallback:
+                            input_schema = str(fallback)
+
+                    raw_readme = _attr(actor_def, "readme") or _attr(build_detail, "readme")
+                    if raw_readme:
+                        readme = str(raw_readme)[:3000]
+
+            username = _attr(actor_info, "username", "")
+            name = _attr(actor_info, "name", "")
+            return {
+                "actor_id": f"{username}~{name}",
+                "name": name,
+                "description": _attr(actor_info, "description", ""),
+                "input_schema": input_schema,
+                "readme": readme,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("apify_discover schema fetch error for %s: %s", actor_id, exc)
+            return {"error": str(exc)}
 
     # Store search
     try:
