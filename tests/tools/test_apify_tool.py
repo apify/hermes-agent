@@ -165,3 +165,28 @@ class TestDiscoverActorSchema:
 
         assert "error" in result
         assert "not found" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# apify_discover — validation
+# ---------------------------------------------------------------------------
+
+class TestDiscoverValidation:
+    def test_missing_both_params_returns_error(self, mock_client):
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({})
+        assert "error" in result
+        assert "query" in result["error"]
+        assert "actor_id" in result["error"]
+
+    def test_empty_string_params_treated_as_missing(self, mock_client):
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({"query": "  ", "actor_id": ""})
+        assert "error" in result
+
+    def test_interrupted_returns_error(self, mock_client, monkeypatch):
+        monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: True)
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({"query": "test"})
+        assert result == {"error": "Interrupted"}
+        mock_client.store.assert_not_called()
