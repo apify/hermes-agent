@@ -14,7 +14,12 @@ import pytest
 
 @pytest.fixture
 def mock_client(monkeypatch):
-    """Patch _get_apify_client to return a MagicMock client."""
+    """Patch _get_apify_client to return a MagicMock client.
+
+    NOTE: _attr() checks hasattr() first, which always returns True on MagicMock.
+    The 'default' argument in _attr() is never used on MagicMock objects.
+    Always explicitly set every attribute you want to read in your tests.
+    """
     client = MagicMock()
     monkeypatch.setattr(
         "plugins.web.apify.provider._get_apify_client",
@@ -79,3 +84,12 @@ class TestDiscoverStoreSearch:
         result = _discover_handler({"query": "test"})
 
         assert len(result["actors"][0]["description"]) == 200
+
+    def test_store_search_api_error_returns_error_dict(self, mock_client):
+        mock_client.store.return_value.list.side_effect = RuntimeError("API error")
+
+        from tools.apify_tool import _discover_handler
+        result = _discover_handler({"query": "test"})
+
+        assert "error" in result
+        assert "API error" in result["error"]
