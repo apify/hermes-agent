@@ -190,3 +190,93 @@ class TestDiscoverValidation:
         result = _discover_handler({"query": "test"})
         assert result == {"error": "Interrupted"}
         mock_client.store.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# apify_start
+# ---------------------------------------------------------------------------
+
+class TestStart:
+    def _make_run_mock(self, run_id="r1", dataset_id="d1", status="QUEUED"):
+        run = MagicMock()
+        run.id = run_id
+        run.default_dataset_id = dataset_id
+        run.status = status
+        return run
+
+    def test_single_run_returns_run_ref(self, mock_client):
+        mock_client.actor.return_value.start.return_value = self._make_run_mock()
+
+        from tools.apify_tool import _start_handler
+        result = _start_handler({
+            "runs": [{"actor_id": "apify~test", "input": {"key": "val"}}]
+        })
+
+        assert "runs" in result
+        assert len(result["runs"]) == 1
+        r = result["runs"][0]
+        assert r["run_id"] == "r1"
+        assert r["actor_id"] == "apify~test"
+        assert r["dataset_id"] == "d1"
+        assert r["status"] == "QUEUED"
+        mock_client.actor.return_value.start.assert_called_once_with(
+            run_input={"key": "val"}
+        )
+
+    def test_label_included_when_provided(self, mock_client):
+        mock_client.actor.return_value.start.return_value = self._make_run_mock()
+
+        from tools.apify_tool import _start_handler
+        result = _start_handler({
+            "runs": [{"actor_id": "apify~test", "input": {}, "label": "my-run"}]
+        })
+
+        assert result["runs"][0]["label"] == "my-run"
+
+    def test_label_absent_when_not_provided(self, mock_client):
+        mock_client.actor.return_value.start.return_value = self._make_run_mock()
+
+        from tools.apify_tool import _start_handler
+        result = _start_handler({
+            "runs": [{"actor_id": "apify~test", "input": {}}]
+        })
+
+        assert "label" not in result["runs"][0]
+
+    def test_batch_start_two_runs(self, mock_client):
+        run1 = self._make_run_mock(run_id="r1", dataset_id="d1")
+        run2 = self._make_run_mock(run_id="r2", dataset_id="d2")
+        mock_client.actor.return_value.start.side_effect = [run1, run2]
+
+        from tools.apify_tool import _start_handler
+        result = _start_handler({
+            "runs": [
+                {"actor_id": "apify~actor-a", "input": {}},
+                {"actor_id": "apify~actor-b", "input": {}},
+            ]
+        })
+
+        assert len(result["runs"]) == 2
+        assert result["runs"][0]["run_id"] == "r1"
+        assert result["runs"][1]["run_id"] == "r2"
+
+    def test_per_run_api_error_goes_to_errors(self, mock_client):
+        mock_client.actor.return_value.start.side_effect = RuntimeError("not found")
+
+        from tools.apify_tool import _start_handler
+        result = _start_handler({
+            "runs": [{"actor_id": "apify~bad-actor", "input": {}}]
+        })
+
+        assert result["runs"] == []
+        assert len(result["errors"]) == 1
+        assert "not found" in result["errors"][0]["error"]
+
+    def test_interrupted_returns_early(self, mock_client, monkeypatch):
+        monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: True)
+
+        from tools.apify_tool import _start_handler
+        result = _start_handler({"runs": [{"actor_id": "apify~test", "input": {}}]})
+
+        assert result == {"error": "Interrupted"}
+        mock_client.actor.assert_not_called()

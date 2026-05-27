@@ -129,7 +129,49 @@ def _discover_handler(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _start_handler(args: Dict[str, Any]) -> Dict[str, Any]:
-    return {}
+    from tools.interrupt import is_interrupted
+    if is_interrupted():
+        return {"error": "Interrupted"}
+
+    run_specs = args.get("runs") or []
+    if not run_specs:
+        return {"error": "Provide at least one run spec in 'runs'."}
+
+    client = _get_client()
+    started: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for spec in run_specs:
+        actor_id = (spec.get("actor_id") or "").strip()
+        run_input = spec.get("input") or {}
+        label = spec.get("label")
+
+        if not actor_id:
+            errors.append({"error": "Missing 'actor_id' in run spec."})
+            continue
+
+        try:
+            run = client.actor(actor_id).start(run_input=run_input)
+            entry: Dict[str, Any] = {
+                "run_id": run.id,
+                "actor_id": actor_id,
+                "dataset_id": run.default_dataset_id,
+                "status": run.status,
+            }
+            if label:
+                entry["label"] = label
+            started.append(entry)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("apify_start error for %s: %s", actor_id, exc)
+            err: Dict[str, Any] = {"actor_id": actor_id, "error": str(exc)}
+            if label:
+                err["label"] = label
+            errors.append(err)
+
+    result: Dict[str, Any] = {"runs": started}
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 async def _collect_handler(args: Dict[str, Any]) -> Dict[str, Any]:
