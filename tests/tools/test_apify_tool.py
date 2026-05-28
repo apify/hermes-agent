@@ -1,9 +1,8 @@
 """Tests for tools/apify_tool.py — all mocked, no live Actor calls."""
 from __future__ import annotations
 
-import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -61,11 +60,13 @@ class TestDiscoverStoreSearch:
         assert len(result["actors"]) == 1
         a = result["actors"][0]
         assert a["actor_id"] == "apify~instagram-scraper"
-        assert a["name"] == "Instagram Scraper"
+        assert a["name"] == "instagram-scraper"
+        assert a["title"] == "Instagram Scraper"
+        assert a["username"] == "apify"
         assert a["run_count"] == 50000
         assert a["rating"] == 4.7
         mock_client.store.return_value.list.assert_called_once_with(
-            search="instagram scraper", limit=10
+            search="instagram scraper", limit=10, sort_by="relevance"
         )
 
     def test_description_truncated_to_200_chars(self, mock_client):
@@ -101,18 +102,13 @@ class TestDiscoverStoreSearch:
 
 class TestDiscoverActorSchema:
     def _setup_build_mock(self, mock_client, *, input_schema=None, readme=None):
-        """Helper: wire up actor + build mock chain."""
+        """Helper: wire up actor + build mock chain for default_build() path."""
         actor_info = MagicMock()
         actor_info.username = "apify"
         actor_info.name = "google-search-scraper"
+        actor_info.title = "Google Search Scraper"
         actor_info.description = "Scrapes Google Search."
         mock_client.actor.return_value.get.return_value = actor_info
-
-        build_item = MagicMock()
-        build_item.id = "build-abc"
-        builds_list = MagicMock()
-        builds_list.items = [build_item]
-        mock_client.actor.return_value.builds.return_value.list.return_value = builds_list
 
         build_detail = MagicMock()
         actor_def = MagicMock()
@@ -121,7 +117,7 @@ class TestDiscoverActorSchema:
         build_detail.actorDefinition = actor_def
         build_detail.inputSchema = None
         build_detail.readme = None
-        mock_client.build.return_value.get.return_value = build_detail
+        mock_client.actor.return_value.default_build.return_value.get.return_value = build_detail
 
         return actor_info, build_detail
 
@@ -134,9 +130,13 @@ class TestDiscoverActorSchema:
 
         assert result["actor_id"] == "apify~google-search-scraper"
         assert result["name"] == "google-search-scraper"
+        assert result["title"] == "Google Search Scraper"
+        assert result["username"] == "apify"
         assert result["description"] == "Scrapes Google Search."
         assert json.loads(result["input_schema"]) == schema
         assert result["readme"] == "# README content"
+        assert "apify_start" in result["tip"]
+        assert "apify~google-search-scraper" in result["tip"]
 
     def test_readme_truncated_to_3000_chars(self, mock_client):
         self._setup_build_mock(mock_client, readme="R" * 4000)

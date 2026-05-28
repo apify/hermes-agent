@@ -1,8 +1,8 @@
 """Apify Actor execution tools — discover, start, collect."""
 from __future__ import annotations
 
-import asyncio  # noqa: F401 — used by _collect_handler
-import json     # noqa: F401 — used by handlers
+import asyncio
+import json
 import logging
 from typing import Any, Dict, List
 
@@ -33,7 +33,7 @@ def _check_token() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Handlers (stubs — filled in by later tasks)
+# Handlers
 # ---------------------------------------------------------------------------
 
 def _discover_handler(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -65,38 +65,39 @@ def _discover_handler(args: Dict[str, Any]) -> Dict[str, Any]:
                     )
                 }
 
-            builds_result = client.actor(actor_id).builds().list(limit=1, desc=True)
-            build_items = _attr(builds_result, "items") or []
-
             input_schema: Any = None
             readme: Any = None
 
-            if build_items:
-                build_item = build_items[0]
-                build_id = _attr(build_item, "id")
-                build_detail = client.build(build_id).get()
-                if build_detail is not None:
-                    actor_def = _attr(build_detail, "actorDefinition") or {}
-                    raw_schema = _attr(actor_def, "input")
-                    if raw_schema:
-                        input_schema = json.dumps(raw_schema)
-                    else:
-                        fallback = _attr(build_detail, "inputSchema")
-                        if fallback:
-                            input_schema = str(fallback)
+            build_detail = client.actor(actor_id).default_build().get()
+            if build_detail is not None:
+                actor_def = _attr(build_detail, "actorDefinition") or {}
+                raw_schema = _attr(actor_def, "input")
+                if raw_schema:
+                    input_schema = json.dumps(raw_schema)
+                else:
+                    fallback = _attr(build_detail, "inputSchema")
+                    if fallback:
+                        input_schema = str(fallback)
 
-                    raw_readme = _attr(actor_def, "readme") or _attr(build_detail, "readme")
-                    if raw_readme:
-                        readme = str(raw_readme)[:3000]
+                raw_readme = _attr(actor_def, "readme") or _attr(build_detail, "readme")
+                if raw_readme:
+                    readme = str(raw_readme)[:3000]
 
             username = _attr(actor_info, "username", "")
             name = _attr(actor_info, "name", "")
+            title = _attr(actor_info, "title", "") or name
             return {
                 "actor_id": f"{username}~{name}",
                 "name": name,
+                "title": title,
+                "username": username,
                 "description": _attr(actor_info, "description", ""),
                 "input_schema": input_schema,
                 "readme": readme,
+                "tip": (
+                    f"Use apify_start with actor_id='{username}~{name}' "
+                    "and an input matching the input_schema above."
+                ),
             }
         except Exception as exc:  # noqa: BLE001
             logger.warning("apify_discover schema fetch error for %s: %s", actor_id, exc)
@@ -104,7 +105,7 @@ def _discover_handler(args: Dict[str, Any]) -> Dict[str, Any]:
 
     # Store search
     try:
-        result = client.store().list(search=query, limit=10)
+        result = client.store().list(search=query, limit=10, sort_by="relevance")
         items = _attr(result, "items") or []
         actors: List[Dict[str, Any]] = []
         for item in items:
@@ -117,7 +118,9 @@ def _discover_handler(args: Dict[str, Any]) -> Dict[str, Any]:
             rating = _attr(stats, "averageRating")
             actors.append({
                 "actor_id": f"{username}~{name}",
-                "name": title,
+                "name": name,
+                "title": title,
+                "username": username,
                 "description": desc,
                 "run_count": run_count,
                 "rating": rating,
@@ -238,19 +241,13 @@ async def _collect_handler(args: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning("apify_collect error for run %s: %s", run_id, exc)
             return {**base, "_type": "error", "error": str(exc)}
 
-    raw_results = await asyncio.gather(
-        *[_check_run(ref) for ref in run_refs],
-        return_exceptions=True,
-    )
+    raw_results = await asyncio.gather(*[_check_run(ref) for ref in run_refs])
 
     completed: List[Dict[str, Any]] = []
     pending: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
 
     for r in raw_results:
-        if isinstance(r, Exception):
-            errors.append({"error": str(r)})
-            continue
         t = r.pop("_type", "error")
         if t == "pending":
             pending.append(r)
