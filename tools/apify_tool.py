@@ -191,8 +191,6 @@ async def _collect_handler(args: Dict[str, Any]) -> Dict[str, Any]:
         dataset_id = ref.get("dataset_id", "")
         label = ref.get("label")
 
-        run_info = await asyncio.to_thread(client.run(run_id).get)
-
         base: Dict[str, Any] = {
             "run_id": run_id,
             "actor_id": actor_id,
@@ -201,20 +199,27 @@ async def _collect_handler(args: Dict[str, Any]) -> Dict[str, Any]:
         if label:
             base["label"] = label
 
-        if run_info is None:
-            return {**base, "_type": "error", "error": "Run not found."}
+        try:
+            run_info = await asyncio.to_thread(client.run(run_id).get)
 
-        status = _attr(run_info, "status", "UNKNOWN")
-        base["status"] = status
+            if run_info is None:
+                return {**base, "_type": "error", "error": "Run not found."}
 
-        if status not in _TERMINAL_STATUSES:
-            return {**base, "_type": "pending"}
+            status = _attr(run_info, "status", "UNKNOWN")
+            base["status"] = status
 
-        if status != "SUCCEEDED":
-            return {**base, "_type": "error", "error": f"Run ended with status: {status}"}
+            if status not in _TERMINAL_STATUSES:
+                return {**base, "_type": "pending"}
 
-        # SUCCEEDED — fetch dataset (implemented in Task 8)
-        return {**base, "_type": "succeeded_placeholder"}
+            if status != "SUCCEEDED":
+                return {**base, "_type": "error", "error": f"Run ended with status: {status}"}
+
+            # SUCCEEDED — fetch dataset (implemented in Task 8)
+            return {**base, "_type": "succeeded_placeholder"}
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("apify_collect error for run %s: %s", run_id, exc)
+            return {**base, "_type": "error", "error": str(exc)}
 
     raw_results = await asyncio.gather(
         *[_check_run(ref) for ref in run_refs],
