@@ -370,3 +370,74 @@ class TestCollectNonTerminal:
         })
 
         assert result["pending"][0]["label"] == "instagram"
+
+
+# ---------------------------------------------------------------------------
+# apify_collect — succeeded path + external content wrapping
+# ---------------------------------------------------------------------------
+
+class TestCollectSucceeded:
+    @pytest.mark.asyncio
+    async def test_succeeded_fetches_dataset_and_wraps_content(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "SUCCEEDED"
+        mock_client.run.return_value.get.return_value = run_info
+
+        items = [{"title": "Result 1", "url": "https://example.com"}]
+        dataset_result = MagicMock()
+        dataset_result.items = items
+        mock_client.dataset.return_value.list_items.return_value = dataset_result
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result["all_done"] is True
+        assert len(result["completed"]) == 1
+        c = result["completed"][0]
+        assert c["status"] == "SUCCEEDED"
+        assert c["result_count"] == 1
+        assert "<<<EXTERNAL_UNTRUSTED_CONTENT>>>" in c["data"]
+        assert "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>" in c["data"]
+        assert "Result 1" in c["data"]
+        mock_client.dataset.return_value.list_items.assert_called_once_with(limit=100)
+
+    @pytest.mark.asyncio
+    async def test_dataset_content_truncated_at_50000_chars(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "SUCCEEDED"
+        mock_client.run.return_value.get.return_value = run_info
+
+        # Create items whose JSON serialization exceeds 50k chars
+        items = [{"data": "x" * 1000} for _ in range(100)]
+        dataset_result = MagicMock()
+        dataset_result.items = items
+        mock_client.dataset.return_value.list_items.return_value = dataset_result
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        raw_data = result["completed"][0]["data"]
+        # Strip markers to measure just the content length
+        content = raw_data.replace("<<<EXTERNAL_UNTRUSTED_CONTENT>>>\n", "").replace(
+            "\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>", ""
+        )
+        assert "[…truncated]" in content
+
+    @pytest.mark.asyncio
+    async def test_all_done_true_when_only_succeeded(self, mock_client):
+        run_info = MagicMock()
+        run_info.status = "SUCCEEDED"
+        mock_client.run.return_value.get.return_value = run_info
+        mock_client.dataset.return_value.list_items.return_value = MagicMock(items=[])
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result["all_done"] is True
+        assert result["pending"] == []

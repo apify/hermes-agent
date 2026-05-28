@@ -214,8 +214,25 @@ async def _collect_handler(args: Dict[str, Any]) -> Dict[str, Any]:
             if status != "SUCCEEDED":
                 return {**base, "_type": "error", "error": f"Run ended with status: {status}"}
 
-            # SUCCEEDED — fetch dataset (implemented in Task 8)
-            return {**base, "_type": "succeeded_placeholder"}
+            # SUCCEEDED — fetch dataset and wrap as external content
+            dataset_result = await asyncio.to_thread(
+                client.dataset(dataset_id).list_items, limit=100
+            )
+            items = list(_attr(dataset_result, "items") or [])
+            raw = json.dumps(items, indent=2, default=str)
+            if len(raw) > 50_000:
+                raw = raw[:50_000] + "\n\n[…truncated]"
+            wrapped = (
+                "<<<EXTERNAL_UNTRUSTED_CONTENT>>>\n"
+                + raw
+                + "\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
+            )
+            return {
+                **base,
+                "_type": "completed",
+                "result_count": len(items),
+                "data": wrapped,
+            }
 
         except Exception as exc:  # noqa: BLE001
             logger.warning("apify_collect error for run %s: %s", run_id, exc)
@@ -240,7 +257,6 @@ async def _collect_handler(args: Dict[str, Any]) -> Dict[str, Any]:
         elif t == "error":
             errors.append(r)
         else:
-            # placeholder for Task 8 — completed items from succeeded runs
             completed.append(r)
 
     return {
