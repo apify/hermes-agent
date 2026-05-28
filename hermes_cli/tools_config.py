@@ -78,7 +78,7 @@ CONFIGURABLE_TOOLSETS = [
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
     ("yuanbao",          "🤖 Yuanbao",                  "group info, member queries, DM"),
     ("computer_use",     "🖱️  Computer Use (macOS)",     "background desktop control via cua-driver"),
-    ("apify",            "🕷️  Apify Actors",              "discover, start, and collect Actor runs (requires APIFY_API_TOKEN)"),
+    ("apify",            "🎭  Apify Actors",              "discover, start, and collect Actor runs (requires APIFY_API_TOKEN)"),
 ]
 
 # Toolsets that are OFF by default for new installs.
