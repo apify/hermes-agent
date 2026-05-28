@@ -471,6 +471,27 @@ TOOL_CATEGORIES = {
             },
         ],
     },
+    "apify": {
+        "name": "Apify Actors",
+        "icon": "🕷️",
+        "providers": [
+            {
+                "name": "Apify",
+                "badge": "paid",
+                "tag": (
+                    "Run any Actor from the Apify Store — social media, "
+                    "Google Maps, e-commerce, and more."
+                ),
+                "env_vars": [
+                    {
+                        "key": "APIFY_API_TOKEN",
+                        "prompt": "Apify API token",
+                        "url": "https://apify.com/account/integrations",
+                    },
+                ],
+            },
+        ],
+    },
 }
 
 # Simple env-var requirements for toolsets NOT in TOOL_CATEGORIES.
