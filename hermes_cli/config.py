@@ -2300,10 +2300,10 @@ OPTIONAL_ENV_VARS = {
         "category": "tool",
     },
     "APIFY_API_TOKEN": {
-        "description": "Apify API token for web search (RAG Web Browser) and page extract (Website Content Crawler)",
+        "description": "Apify API token for web search (RAG Web Browser), page extract (Website Content Crawler), and Actor tools (apify_discover, apify_start, apify_collect)",
         "prompt": "Apify API token",
         "url": "https://apify.com/account/integrations",
-        "tools": ["web_search", "web_extract"],
+        "tools": ["web_search", "web_extract", "apify_discover", "apify_start", "apify_collect"],
         "password": True,
         "category": "tool",
     },
