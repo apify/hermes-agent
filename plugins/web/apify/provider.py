@@ -110,7 +110,8 @@ def _run_actor_blocking(actor_id: str, run_input: Dict[str, Any]) -> List[Dict[s
     """Start an Apify Actor, wait for completion, return dataset items.
 
     Blocking — intended to be called via asyncio.to_thread from async methods.
-    Returns [] when the Actor fails, is aborted, or produces no dataset.
+    Returns [] when the Actor succeeds but produces no dataset items.
+    Raises RuntimeError on non-SUCCEEDED status so callers can surface the failure.
     Raises ValueError if the client is unconfigured.
     """
     client = _get_apify_client()
@@ -119,11 +120,15 @@ def _run_actor_blocking(actor_id: str, run_input: Dict[str, Any]) -> List[Dict[s
     logger.info("Apify %s started — https://console.apify.com/actors/runs/%s", actor_id, run_id)
     run = client.run(run_id).wait_for_finish()
     if run is None:
-        logger.warning("Apify %s run %s: wait_for_finish returned None", actor_id, run_id)
-        return []
+        raise RuntimeError(
+            f"Apify {actor_id} run {run_id}: wait_for_finish returned None — "
+            f"check https://console.apify.com/actors/runs/{run_id}"
+        )
     if run.status != "SUCCEEDED":
-        logger.warning("Apify %s run %s finished with status %s", actor_id, run_id, run.status)
-        return []
+        raise RuntimeError(
+            f"Apify {actor_id} run {run_id} finished with status {run.status} — "
+            f"check https://console.apify.com/actors/runs/{run_id} for details"
+        )
     dataset_id = run.default_dataset_id
     if not dataset_id:
         return []
@@ -418,7 +423,10 @@ class ApifyWebSearchProvider(WebSearchProvider):
             return {"results": [{"url": url, "title": "", "content": "", "error": "Interrupted"}]}
 
         instructions = kwargs.get("instructions")
-        limit = int(kwargs.get("limit", 20))
+        try:
+            limit = int(kwargs.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
         depth_raw = kwargs.get("depth")
 
         if depth_raw == "basic":
