@@ -443,3 +443,103 @@ class TestCollectSucceeded:
 
         assert result["all_done"] is True
         assert result["pending"] == []
+
+
+# ---------------------------------------------------------------------------
+# apify_collect — mixed states, interrupted, and full workflow
+# ---------------------------------------------------------------------------
+
+class TestCollectMixed:
+    @pytest.mark.asyncio
+    async def test_mixed_pending_and_succeeded(self, mock_client):
+        run1_info = MagicMock()
+        run1_info.status = "RUNNING"
+        run2_info = MagicMock()
+        run2_info.status = "SUCCEEDED"
+
+        def _run_get_side_effect(run_id):
+            m = MagicMock()
+            if run_id == "r1":
+                m.get.return_value = run1_info
+            else:
+                m.get.return_value = run2_info
+            return m
+
+        mock_client.run.side_effect = _run_get_side_effect
+        mock_client.dataset.return_value.list_items.return_value = MagicMock(items=[{"result": 1}])
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [
+                {"run_id": "r1", "actor_id": "apify~a", "dataset_id": "d1"},
+                {"run_id": "r2", "actor_id": "apify~b", "dataset_id": "d2"},
+            ]
+        })
+
+        assert result["all_done"] is False
+        assert len(result["pending"]) == 1
+        assert len(result["completed"]) == 1
+        assert result["pending"][0]["run_id"] == "r1"
+        assert result["completed"][0]["run_id"] == "r2"
+
+    @pytest.mark.asyncio
+    async def test_interrupted_returns_early(self, mock_client, monkeypatch):
+        monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: True)
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result == {"error": "Interrupted"}
+        mock_client.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_api_exception_goes_to_errors(self, mock_client):
+        mock_client.run.return_value.get.side_effect = RuntimeError("API error")
+
+        from tools.apify_tool import _collect_handler
+        result = await _collect_handler({
+            "runs": [{"run_id": "r1", "actor_id": "apify~test", "dataset_id": "d1"}]
+        })
+
+        assert result["all_done"] is True  # no pending
+        assert "API error" in result["errors"][0]["error"]
+
+
+class TestCollectFullWorkflow:
+    """End-to-end: start two runs, collect until all done."""
+
+    @pytest.mark.asyncio
+    async def test_start_then_collect_workflow(self, mock_client):
+        # apify_start
+        run1 = MagicMock(id="r1", default_dataset_id="d1", status="QUEUED")
+        run2 = MagicMock(id="r2", default_dataset_id="d2", status="QUEUED")
+        mock_client.actor.return_value.start.side_effect = [run1, run2]
+
+        from tools.apify_tool import _start_handler, _collect_handler
+
+        start_result = _start_handler({
+            "runs": [
+                {"actor_id": "apify~actor-a", "input": {}, "label": "a"},
+                {"actor_id": "apify~actor-b", "input": {}, "label": "b"},
+            ]
+        })
+        assert len(start_result["runs"]) == 2
+
+        # First collect: both still running
+        run_info_running = MagicMock(status="RUNNING")
+        mock_client.run.return_value.get.return_value = run_info_running
+
+        collect1 = await _collect_handler({"runs": start_result["runs"]})
+        assert collect1["all_done"] is False
+        assert len(collect1["pending"]) == 2
+
+        # Second collect: both succeeded
+        run_info_done = MagicMock(status="SUCCEEDED")
+        mock_client.run.return_value.get.return_value = run_info_done
+        mock_client.dataset.return_value.list_items.return_value = MagicMock(items=[{"row": 1}])
+
+        collect2 = await _collect_handler({"runs": start_result["runs"]})
+        assert collect2["all_done"] is True
+        assert len(collect2["completed"]) == 2
