@@ -402,6 +402,7 @@ class TestCollectSucceeded:
         assert "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>" in c["data"]
         assert "Result 1" in c["data"]
         mock_client.dataset.return_value.list_items.assert_called_once_with(limit=100)
+        mock_client.dataset.assert_called_once_with("d1")
 
     @pytest.mark.asyncio
     async def test_dataset_content_truncated_at_50000_chars(self, mock_client):
@@ -421,11 +422,12 @@ class TestCollectSucceeded:
         })
 
         raw_data = result["completed"][0]["data"]
-        # Strip markers to measure just the content length
+        # Strip markers to check truncated content length
         content = raw_data.replace("<<<EXTERNAL_UNTRUSTED_CONTENT>>>\n", "").replace(
             "\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>", ""
         )
         assert "[…truncated]" in content
+        assert len(content) <= 50_000 + len("\n\n[…truncated]")
 
     @pytest.mark.asyncio
     async def test_all_done_true_when_only_succeeded(self, mock_client):
