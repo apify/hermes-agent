@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from agent.web_search_provider import WebSearchProvider
@@ -106,10 +107,15 @@ def _reset_client_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_actor_blocking(actor_id: str, run_input: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Start an Apify Actor, wait for completion, return dataset items.
+def _run_actor_blocking(
+    actor_id: str, run_input: Dict[str, Any], *, wait_secs: int = 90
+) -> List[Dict[str, Any]]:
+    """Start an Apify Actor, wait up to wait_secs for completion, return dataset items.
 
     Blocking — intended to be called via asyncio.to_thread from async methods.
+    wait_secs must be set slightly below the surrounding asyncio.wait_for timeout so
+    that the SDK returns before asyncio fires; if the run is still active when the
+    timeout expires, it is aborted to prevent ongoing credit consumption.
     Returns [] when the Actor fails, is aborted, or produces no dataset.
     Raises ValueError if the client is unconfigured.
     """
@@ -117,9 +123,19 @@ def _run_actor_blocking(actor_id: str, run_input: Dict[str, Any]) -> List[Dict[s
     started = client.actor(actor_id).start(run_input=run_input)
     run_id = started.id
     logger.info("Apify %s started — https://console.apify.com/actors/runs/%s", actor_id, run_id)
-    run = client.run(run_id).wait_for_finish()
+    run = client.run(run_id).wait_for_finish(wait_duration=timedelta(seconds=wait_secs))
     if run is None:
         logger.warning("Apify %s run %s: wait_for_finish returned None", actor_id, run_id)
+        return []
+    if run.status in ("RUNNING", "READY"):
+        logger.warning(
+            "Apify %s run %s still running after %ds, aborting to stop credit consumption",
+            actor_id, run_id, wait_secs,
+        )
+        try:
+            client.run(run_id).abort()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Apify %s run %s: abort failed: %s", actor_id, run_id, exc)
         return []
     if run.status != "SUCCEEDED":
         logger.warning("Apify %s run %s finished with status %s", actor_id, run_id, run.status)
@@ -135,6 +151,7 @@ def _run_wcc_crawl(url: str, max_pages: int, max_depth: int) -> List[Dict[str, A
 
     Intended to be called via asyncio.to_thread from crawl().
     Returns raw dataset items (plain dicts).
+    wait_secs=290 sits under the 300s asyncio.wait_for guard in crawl().
     """
     return _run_actor_blocking(
         _WCC_ACTOR,
@@ -146,6 +163,7 @@ def _run_wcc_crawl(url: str, max_pages: int, max_depth: int) -> List[Dict[str, A
             "saveMarkdown": True,
             "saveHtml": False,
         },
+        wait_secs=290,
     )
 
 
@@ -154,6 +172,7 @@ def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optiona
 
     Intended to be called via asyncio.to_thread from extract().
     Returns the first dataset item, or None if the Actor returned no items.
+    wait_secs=55 sits under the 60s asyncio.wait_for guard in extract().
     """
     items = _run_actor_blocking(
         _WCC_ACTOR,
@@ -162,6 +181,7 @@ def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optiona
             "maxCrawlPages": 1,
             "outputFormats": output_formats,
         },
+        wait_secs=55,
     )
     if not items:
         return None
@@ -177,9 +197,7 @@ def _run_website_content_crawler(url: str, output_formats: List[str]) -> Optiona
 def _normalize_rag_search_results(items: List[Any], limit: int) -> List[Dict[str, Any]]:
     """Normalize RAG Web Browser dataset items to the registry web search shape."""
     results: List[Dict[str, Any]] = []
-    for item in items[:limit]:
-        if not isinstance(item, dict):
-            continue
+    for item in [i for i in items if isinstance(i, dict)][:limit]:
         sr = item.get("searchResult") or {}
         if not isinstance(sr, dict):
             sr = {}
