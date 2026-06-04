@@ -96,8 +96,6 @@ _firecrawl_client_config: Optional[Any] = None
 _parallel_client: Optional[Any] = None
 _async_parallel_client: Optional[Any] = None
 _exa_client: Optional[Any] = None
-_apify_client: Optional[Any] = None
-_apify_client_config: Optional[Any] = None
 
 from agent.auxiliary_client import (
     async_call_llm,
