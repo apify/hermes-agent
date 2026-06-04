@@ -48,6 +48,7 @@ def _clear_web_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "TOOL_GATEWAY_DOMAIN",
         "TOOL_GATEWAY_USER_TOKEN",
         "XAI_API_KEY",
+        "APIFY_API_TOKEN",
     ):
         monkeypatch.delenv(k, raising=False)
 
@@ -73,12 +74,13 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestBundledPluginsRegister:
     """All eight bundled web plugins discover and register correctly."""
 
-    def test_all_seven_plugins_present_in_registry(self) -> None:
+    def test_all_bundled_plugins_present_in_registry(self) -> None:
         _ensure_plugins_loaded()
         from agent.web_search_registry import list_providers
 
         names = sorted(p.name for p in list_providers())
         assert names == [
+            "apify",
             "brave-free",
             "ddgs",
             "exa",
@@ -104,6 +106,7 @@ class TestBundledPluginsRegister:
             ("firecrawl", True, True, True),
             # xai: search-only via Grok's agentic web_search tool.
             ("xai", True, False, False),
+            ("apify", True, True, True),
         ],
     )
     def test_capability_flags_match_spec(
@@ -124,7 +127,7 @@ class TestBundledPluginsRegister:
 
     @pytest.mark.parametrize(
         "plugin_name",
-        ["brave-free", "ddgs", "searxng", "exa", "parallel", "tavily", "firecrawl", "xai"],
+        ["brave-free", "ddgs", "searxng", "exa", "parallel", "tavily", "firecrawl", "xai", "apify"],
     )
     def test_each_plugin_has_name_and_display_name(self, plugin_name: str) -> None:
         _ensure_plugins_loaded()
@@ -137,7 +140,7 @@ class TestBundledPluginsRegister:
 
     @pytest.mark.parametrize(
         "plugin_name",
-        ["brave-free", "ddgs", "searxng", "exa", "parallel", "tavily", "firecrawl", "xai"],
+        ["brave-free", "ddgs", "searxng", "exa", "parallel", "tavily", "firecrawl", "xai", "apify"],
     )
     def test_each_plugin_has_setup_schema(self, plugin_name: str) -> None:
         """``get_setup_schema()`` returns a dict the picker can consume."""
@@ -252,6 +255,16 @@ class TestIsAvailable:
         assert p is not None
         assert p.is_available() is False  # no XAI_API_KEY, no auth.json
         monkeypatch.setenv("XAI_API_KEY", "real")
+        assert p.is_available() is True
+
+    def test_apify_requires_api_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _ensure_plugins_loaded()
+        from agent.web_search_registry import get_provider
+
+        p = get_provider("apify")
+        assert p is not None
+        assert p.is_available() is False  # no APIFY_API_TOKEN
+        monkeypatch.setenv("APIFY_API_TOKEN", "test-token")
         assert p.is_available() is True
 
 
@@ -377,6 +390,14 @@ class TestAsyncExtractDispatch:
         assert p is not None
         assert inspect.iscoroutinefunction(p.extract) is False
 
+    def test_apify_extract_is_async(self) -> None:
+        _ensure_plugins_loaded()
+        from agent.web_search_registry import get_provider
+
+        p = get_provider("apify")
+        assert p is not None
+        assert inspect.iscoroutinefunction(p.extract) is True
+
 
 # ---------------------------------------------------------------------------
 # Error response shape (preserved bit-for-bit from legacy)
@@ -500,3 +521,39 @@ class TestErrorResponseShapes:
         assert isinstance(result, dict)
         assert result.get("success") is False
         assert "error" in result
+
+    def test_apify_search_returns_error_dict_when_unconfigured(self) -> None:
+        _ensure_plugins_loaded()
+        from agent.web_search_registry import get_provider
+
+        p = get_provider("apify")
+        assert p is not None
+        result = p.search("test query", limit=5)
+        assert isinstance(result, dict)
+        assert result.get("success") is False
+        assert "error" in result
+
+    def test_apify_extract_returns_per_url_errors_when_unconfigured(self) -> None:
+        _ensure_plugins_loaded()
+        from agent.web_search_registry import get_provider
+
+        p = get_provider("apify")
+        assert p is not None
+        result = asyncio.run(p.extract(["https://example.com"]))
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "error" in result[0]
+        assert result[0]["url"] == "https://example.com"
+
+    def test_apify_crawl_returns_error_dict_when_unconfigured(self) -> None:
+        _ensure_plugins_loaded()
+        from agent.web_search_registry import get_provider
+
+        p = get_provider("apify")
+        assert p is not None
+        result = asyncio.run(p.crawl("https://example.com"))
+        assert isinstance(result, dict)
+        assert "results" in result
+        assert len(result["results"]) >= 1
+        assert "error" in result["results"][0]
+        assert result["results"][0]["url"] == "https://example.com"
