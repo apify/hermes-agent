@@ -1,0 +1,34 @@
+manifest_version: 1
+
+name: apify
+description: Discover and run Apify Actors for web scraping, data extraction, and automation, and search Apify documentation.
+source: https://docs.apify.com/platform/integrations/mcp
+
+# Hosted Streamable HTTP; disable optional tool/client telemetry by default.
+transport:
+  type: http
+  url: https://mcp.apify.com/?telemetry-enabled=false
+
+auth:
+  type: oauth
+
+# Keep the server's default tool surface and let users choose at install time.
+# Actor execution can consume Apify credits; no Actors are run during setup.
+suggest:
+  keywords:
+    - apify
+  hosts:
+    - apify.com
+
+post_install: |
+  Authenticate with your Apify account in the browser when prompted.
+  If authentication was not completed during installation, run:
+    hermes mcp login apify
+
+  Start a new Hermes session after authentication to load the tools.
+  You can change the enabled tools at any time with:
+    hermes mcp configure apify
+
+  Running Actors can consume Apify credits. Review Actor pricing and inputs
+  before starting a run. For a read-only first test, search Apify documentation
+  or discover Actors without running them.
